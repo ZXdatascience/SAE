@@ -49,10 +49,9 @@ data, labels = add_lag(min30_filtered)
 idx = np.random.rand(data.shape[0]) < 0.8
 train_X, train_Y = data[idx], labels[idx]
 test_X, test_Y = data[~idx], labels[~idx]
-print(train_X)
-print(train_Y)
 
-sae_model = StackedAutoEncoder(dims=[200, 200], activations=['linear', 'linear'], epoch=[
+sae_model = StackedAutoEncoder(dims=[50, 50], activations=['linear', 'linear'], epoch=[
                            3000, 3000], loss='rmse', lr=0.007, batch_size=100, print_step=200)
 sae_model.fit(train_X)
 test_X_ = sae_model.transform(test_X)
+sae_model.finetunning(train_X, train_Y, 'rmse', learning_rate=0.005, print_step=200, epoch=2000, batch_size=3000)

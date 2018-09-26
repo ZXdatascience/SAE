@@ -131,7 +131,30 @@ class StackedAutoEncoder:
         self.weights.append(sess.run(encode['weights']))
         self.biases.append(sess.run(encode['biases']))
         return sess.run(encoded, feed_dict={x: data_x_})
-    
+
+    def finetunning(self, data, labels, loss, learning_rate, print_step, epoch, batch_size=100):
+        tf.reset_default_graph()
+        sess = tf.Session()
+        print(len(data[0]))
+        input_dim = len(data[0])
+        x = tf.placeholder(dtype=tf.float32, shape=[batch_size, input_dim], name='x')
+        new_x = x
+        target = tf.placeholder(dtype=tf.float32, shape=[batch_size], name='target')
+        for w, b, a in zip(self.weights, self.biases, self.activations):
+            new_x = self.activate(tf.add(tf.matmul(new_x, w), b), a)
+
+        output = tf.layers.dense(x, batch_size, activation=tf.nn.sigmoid)
+        if loss == 'rmse':
+            loss = tf.sqrt(tf.reduce_mean(tf.square(tf.subtract(output, target))))
+        train_op = tf.train.AdamOptimizer(learning_rate).minimize(loss)
+        sess.run(tf.global_variables_initializer())
+        for i in range(epoch):
+            b_x, b_x_ = utils.get_batch(
+                data, labels, batch_size)
+            sess.run(train_op, feed_dict={x: b_x, target: b_x_})
+            if (i + 1) % print_step == 0:
+                l = sess.run(loss, feed_dict={x: b_x, target: b_x_})
+                print('epoch {0}: loss = {1}'.format(i, l))
 
     def activate(self, linear, name):
         if name == 'sigmoid':
