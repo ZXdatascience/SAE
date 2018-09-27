@@ -4,7 +4,7 @@ import tensorflow as tf
 
 allowed_activations = ['sigmoid', 'tanh', 'softmax', 'relu', 'linear']
 allowed_noises = [None, 'gaussian', 'mask']
-allowed_losses = ['rmse', 'cross-entropy']
+allowed_losses = ['rmse', 'cross-entropy', 'sparse']
 
 
 class StackedAutoEncoder:
@@ -28,7 +28,7 @@ class StackedAutoEncoder:
             self.noise, allowed_noises), "Incorrect noise given"
 
     def __init__(self, dims, activations, epoch=1000, noise=None, loss='rmse',
-                 lr=0.001, batch_size=100, print_step=50):
+                 lr=0.001, rho=0.01, beta=3, batch_size=100, print_step=50):
         self.print_step = print_step
         self.batch_size = batch_size
         self.lr = lr
@@ -39,7 +39,11 @@ class StackedAutoEncoder:
         self.dims = dims
         self.assertions()
         self.depth = len(dims)
+        self.rho = rho
+        self.beta = beta
         self.weights, self.biases = [], []
+        self.dense_weights, self.dense_biases = [], []
+        self.dense_weights_values, self.dense_biases_values = [], []
 
     def add_noise(self, x):
         if self.noise == 'gaussian':
@@ -91,6 +95,10 @@ class StackedAutoEncoder:
         self.fit(x)
         return self.transform(x)
 
+    @staticmethod
+    def kl_divergence(rho, rho_hat):
+        return rho * tf.log(rho) - rho * tf.log(rho_hat) + (1 - rho) * tf.log(1 - rho) - (1 - rho) * tf.log(1 - rho_hat)
+
     def run(self, data_x, data_x_, hidden_dim, activation, loss, lr,
             print_step, epoch, batch_size=100):
         tf.reset_default_graph()
@@ -108,13 +116,18 @@ class StackedAutoEncoder:
                   'weights': tf.transpose(encode['weights'])}
         encoded = self.activate(
             tf.matmul(x, encode['weights']) + encode['biases'], activation)
-        decoded = tf.matmul(encoded, decode['weights']) + decode['biases']
+        decoded = self.activate(tf.matmul(encoded, decode['weights']) + decode['biases'], activation)
 
         # reconstruction loss
         if loss == 'rmse':
             loss = tf.sqrt(tf.reduce_mean(tf.square(tf.subtract(x_, decoded))))
         elif loss == 'cross-entropy':
             loss = -tf.reduce_mean(x_ * tf.log(decoded))
+        elif loss == 'sparse':
+            rho_hat = tf.reduce_mean(encoded, axis=0)
+            kl = self.kl_divergence(self.rho, rho_hat)
+            diff = tf.subtract(x_, decoded)
+            loss = 0.5 * tf.reduce_mean(tf.reduce_sum(diff ** 2, axis=1)) + self.beta * tf.reduce_sum(kl)
         train_op = tf.train.AdamOptimizer(lr).minimize(loss)
 
         sess.run(tf.global_variables_initializer())
@@ -132,29 +145,66 @@ class StackedAutoEncoder:
         self.biases.append(sess.run(encode['biases']))
         return sess.run(encoded, feed_dict={x: data_x_})
 
-    def finetunning(self, data, labels, loss, learning_rate, print_step, epoch, batch_size=100):
+
+
+    def finetunning(self, data, labels, loss, dense_activations, dense_layers, learning_rate, print_step, epoch,
+                    ae_traininable=True, batch_size=100):
         tf.reset_default_graph()
         sess = tf.Session()
-        print(len(data[0]))
         input_dim = len(data[0])
         x = tf.placeholder(dtype=tf.float32, shape=[batch_size, input_dim], name='x')
         new_x = x
-        target = tf.placeholder(dtype=tf.float32, shape=[batch_size], name='target')
+        target = tf.placeholder(dtype=tf.float32, shape=[batch_size, 1], name='target')
         for w, b, a in zip(self.weights, self.biases, self.activations):
-            new_x = self.activate(tf.add(tf.matmul(new_x, w), b), a)
+            weight = tf.Variable(initial_value=w, dtype=tf.float32, name='ae_weight', trainable=ae_traininable)
+            bias = tf.Variable(initial_value=b, dtype=tf.float32, name='ae_bias', trainable=ae_traininable)
+            new_x = self.activate(tf.add(tf.matmul(new_x, weight), bias), a)
 
-        output = tf.layers.dense(x, batch_size, activation=tf.nn.sigmoid)
+        for i, layer in enumerate(dense_layers):
+            if i == 0:
+                input_dim = self.dims[-1]
+            else:
+                input_dim = dense_layers[i-1]
+            weight_dense = tf.Variable(tf.truncated_normal([input_dim, layer]), dtype=tf.float32, name='dense_weight')
+            bias_dense = tf.Variable(tf.truncated_normal([layer]), dtype=tf.float32, name='dense_bias')
+            new_x = self.activate(tf.add(tf.matmul(new_x, weight_dense), bias_dense), dense_activations[i])
+            self.dense_weights.append(weight_dense)
+            self.dense_biases.append(bias_dense)
         if loss == 'rmse':
-            loss = tf.sqrt(tf.reduce_mean(tf.square(tf.subtract(output, target))))
+            loss = tf.sqrt(tf.reduce_mean(tf.square(tf.subtract(new_x, target))))
         train_op = tf.train.AdamOptimizer(learning_rate).minimize(loss)
+        print(tf.trainable_variables())
         sess.run(tf.global_variables_initializer())
         for i in range(epoch):
             b_x, b_x_ = utils.get_batch(
                 data, labels, batch_size)
+            b_x_ = b_x_.reshape(-1, 1)
             sess.run(train_op, feed_dict={x: b_x, target: b_x_})
             if (i + 1) % print_step == 0:
-                l = sess.run(loss, feed_dict={x: b_x, target: b_x_})
+                l, o, t = sess.run([loss, new_x, target], feed_dict={x: b_x, target: b_x_})
                 print('epoch {0}: loss = {1}'.format(i, l))
+                # print('epoch {0}: loss = {1}, output={2}, target={3}'.format(i, l, o.reshape(-1), t.reshape(-1)))
+        for i in range(len(dense_layers)):
+            self.dense_weights_values.append(sess.run(self.dense_weights[i]))
+            self.dense_biases_values.append(sess.run(self.dense_biases[i]))
+
+    def dense_evaluate(self, data, activations):
+        tf.reset_default_graph()
+        sess = tf.Session()
+        x = tf.constant(data, dtype=tf.float32)
+        for w_ae, b_ae, a in zip(self.weights, self.biases, self.activations):
+            weight_ae = tf.constant(w_ae, dtype=tf.float32)
+            bias_ae = tf.constant(b_ae, dtype=tf.float32)
+            layer = tf.matmul(x, weight_ae) + bias_ae
+            x = self.activate(layer, a)
+        for w_dense, b_dense, a_dense in zip(self.dense_weights_values, self.dense_biases_values, activations):
+            weight_dense = tf.constant(w_dense)
+            bias_dense = tf.constant(b_dense)
+            x = self.activate(tf.matmul(x, weight_dense) + bias_dense, a_dense)
+            print(x)
+        test_res = x.eval(session=sess)
+        return test_res
+
 
     def activate(self, linear, name):
         if name == 'sigmoid':
