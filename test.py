@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 from statsmodels.tsa.stattools import pacf
 from sklearn import preprocessing
-from hpelm import ELM
+from hpelm.hpelm.elm import ELM
 
 def add_lag(cons, thres=0.1):
     cons = np.array(cons)
@@ -38,13 +38,11 @@ def to_30_min(cons):
     return res
 
 
-# mnist = input_data.read_data_sets(, one_hot=True)
-# data, target = mnist.train.images, mnist.train.labels
 train_data_name = "data/building1retail.csv"
 df = pd.read_csv(train_data_name)
 electricity_cons = df['Power (kW)'].values
-mean_filtered_cons = mean_filter(electricity_cons)
-min30_filtered = to_30_min(mean_filtered_cons)
+# mean_filtered_cons = mean_filter(electricity_cons)
+min30_filtered = to_30_min(electricity_cons)
 data, labels = add_lag(min30_filtered)
 
 data_scalar = preprocessing.MinMaxScaler()
@@ -55,8 +53,8 @@ labels = labels_scalar.fit_transform(labels.reshape(-1, 1))
 idx = np.random.rand(data.shape[0]) < 0.8
 train_X, train_Y = data[idx], labels[idx]
 test_X, test_Y = data[~idx], labels[~idx]
-sae_model = StackedAutoEncoder(dims=[50, 50], activations=['sigmoid', 'sigmoid'], epoch=[10000, 10000],
-                               noise='mask-0.5', loss='sparse', lr=0.007, batch_size=100, print_step=200)
+sae_model = StackedAutoEncoder(dims=[50, 50], activations=['sigmoid', 'sigmoid'], epoch=[5000, 5000],
+                               noise='mask-0.5', loss='sparse', lr=0.007, batch_size=200, print_step=200)
 test_X = test_X[test_Y.reshape(-1) != 0]
 test_Y = test_Y[test_Y != 0].reshape(-1, 1)
 train_x_ae_output = sae_model.fit_transform(train_X)
