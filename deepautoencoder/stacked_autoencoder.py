@@ -62,7 +62,6 @@ class StackedAutoEncoder:
 
     def fit(self, x):
         for i in range(self.depth):
-            print('Layer {0}'.format(i + 1))
             if self.noise is None:
                 x = self.run(data_x=x, activation=self.activations[i],
                              data_x_=x,
@@ -137,14 +136,13 @@ class StackedAutoEncoder:
             sess.run(train_op, feed_dict={x: b_x, x_: b_x_})
             if (i + 1) % print_step == 0:
                 l = sess.run(loss, feed_dict={x: data_x, x_: data_x_})
-                print('epoch {0}: global loss = {1}'.format(i, l))
+                # print('epoch {0}: global loss = {1}'.format(i, l))
         # self.loss_val = l
         # debug
         # print('Decoded', sess.run(decoded, feed_dict={x: self.data_x_})[0])
         self.weights.append(sess.run(encode['weights']))
         self.biases.append(sess.run(encode['biases']))
         return sess.run(encoded, feed_dict={x: data_x_})
-
 
 
     def finetunning(self, data, labels, loss, dense_activations, dense_layers, learning_rate, print_step, epoch,
